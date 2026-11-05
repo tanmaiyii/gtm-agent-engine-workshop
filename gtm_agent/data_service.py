@@ -23,6 +23,31 @@ __all__ = [
 # lookups within a run are served without rebuilding.
 _PROFILES = {}
 
+PROFILE_FIELDS = (
+    "prospect_id", "name", "email", "annual_revenue", "engagement_history",
+    "account_details", "tech_stack", "enrichment_source", "disqualified",
+)
+SENSITIVE_FIELDS = (
+    "billing_qualification", "tax_id", "date_of_birth", "card_on_file",
+    "credit_check_ref",
+)
+
+
+def strip_sensitive_fields(value):
+    "Remove billing and identity fields recursively from structured data."
+    if isinstance(value, dict):
+        return {key: strip_sensitive_fields(item) for key, item in value.items()
+                if key not in SENSITIVE_FIELDS}
+    if isinstance(value, (list, tuple)):
+        return [strip_sensitive_fields(item) for item in value]
+    return value
+
+
+def filter_prospect_profile(profile):
+    "Copy only the prospect fields needed by the agent."
+    return strip_sensitive_fields({key: profile[key] for key in PROFILE_FIELDS
+                                  if key in profile})
+
 # ---------------------------------------------------------------------------
 # Public data-access functions
 # ---------------------------------------------------------------------------
@@ -63,13 +88,17 @@ def fetch_tech_stack(prospect_id):
 @traceable(run_type="tool", name="get_profile_from_db")
 def get_profile_from_db(prospect_id):
     "Look up a stored prospect profile. Returns {'prospect_profile': record|None}."
-    return {"prospect_profile": _PROFILES.get(prospect_id)}
+    profile = _PROFILES.get(prospect_id)
+    if profile is not None:
+        profile = filter_prospect_profile(profile)
+        _PROFILES[prospect_id] = profile
+    return {"prospect_profile": profile}
 
 
 @traceable(run_type="tool", name="save_profile_to_db")
 def save_profile_to_db(prospect_id, profile):
     "Persist a prospect profile to the profile store."
-    _PROFILES[prospect_id] = profile
+    _PROFILES[prospect_id] = filter_prospect_profile(profile)
     return {"saved": True}
 
 def update_prospect_info(prospect_id, technology):
