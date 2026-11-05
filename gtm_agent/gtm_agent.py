@@ -67,14 +67,18 @@ def build_prospect_profile(prospect_id: str) -> dict:
     return {"prospect_profile": built, "found": True}
 
 
+# Overall fit uses a weighted rubric: revenue and technology each count twice as much as segment.
+REVENUE_WEIGHT = 0.4
+TECHNOLOGY_WEIGHT = 0.4
+SEGMENT_WEIGHT = 0.2
+
 SCORING_PROMPT = (
-    "You are a GTM assistant. Score the prospect's potential for the offering from "
-    "1 to 100 based on how good a fit they are, weighing their annual revenue and "
-    "tech stack. In your justification, explicitly list which of the offering's required "
+    "You are a GTM assistant. Return revenue_fit, tech_stack_match, and segment_fit "
+    "scores on a 0–100 scale for the prospect's fit with the offering, plus a "
+    "justification. In your justification, explicitly list which of the offering's required "
     "technologies the prospect has and which required technologies they are missing, naming "
     "each one. Any missing required technology must lower the tech_stack_match component and "
-    "the overall score. Return a score and a justification that reflects your "
-    "overall assessment of this prospect's potential."
+    "the overall score computed from the components."
 )
 
 from typing import Literal
@@ -86,6 +90,11 @@ class RubricBreakdown(BaseModel):
     component_max: Literal[100] = 100
 
 
+class ScoringAssessment(BaseModel):
+    justification: str
+    rubric_breakdown: RubricBreakdown
+
+
 class ProspectScore(BaseModel):
     score: float
     max_score: int = 100
@@ -93,7 +102,7 @@ class ProspectScore(BaseModel):
     rubric_breakdown: RubricBreakdown
 
 
-_scoring_llm = ChatOpenAI(model=MODEL_NAME, temperature=0).with_structured_output(ProspectScore)
+_scoring_llm = ChatOpenAI(model=MODEL_NAME, temperature=0).with_structured_output(ScoringAssessment)
 
 
 def _offering_has_required_fields(offering):
@@ -104,7 +113,7 @@ def _offering_has_required_fields(offering):
 
 @tool
 def score_prospect(prospect_profile: dict, offering: dict | None = None) -> dict:
-    "Score a prospect profile's potential for an offering on a 1-100 scale with a justification. Pass the complete prospect_profile record returned by build_prospect_profile and the complete offering record returned by lookup_offering - ids alone are not enough, so call both of those tools first and unwrap their results before calling this one."
+    "Score a prospect profile's potential for an offering on a 0-100 scale using 40% revenue fit, 40% tech stack match, and 20% segment fit, with a justification. Pass the complete prospect_profile record returned by build_prospect_profile and the complete offering record returned by lookup_offering - ids alone are not enough, so call both of those tools first and unwrap their results before calling this one."
     if offering is None or not _offering_has_required_fields(offering):
         return {"score": None, "error": "Cannot score without a valid offering."}
     # Score against the prospect's saved tech stack of record.
@@ -119,7 +128,18 @@ def score_prospect(prospect_profile: dict, offering: dict | None = None) -> dict
         {"role": "system", "content": SCORING_PROMPT},
         {"role": "user", "content": user},
     ])
-    return result.model_dump()
+    breakdown = result.rubric_breakdown
+    score = round(
+        REVENUE_WEIGHT * breakdown.revenue_fit +
+        TECHNOLOGY_WEIGHT * breakdown.tech_stack_match +
+        SEGMENT_WEIGHT * breakdown.segment_fit,
+        1,
+    )
+    return ProspectScore(
+        score=score,
+        justification=result.justification,
+        rubric_breakdown=breakdown,
+    ).model_dump()
 
 
 @tool
