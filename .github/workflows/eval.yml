@@ -6,9 +6,11 @@ name: PR eval (main vs. fix)
 #
 # `pull_request` (not `pull_request_target`) is intentional: it means fork PRs
 # do NOT get access to the upstream repo's secrets, so the attendee has to
-# put LANGSMITH_API_KEY + OPENAI_API_KEY + DATASET_NAME as secrets on their
-# own fork. That is exactly the workshop model — everyone evaluates against
-# their own workspace.
+# put LANGSMITH_API_KEY + DATASET_NAME as secrets on their own fork, plus
+# either LANGSMITH_GATEWAY (models go through the LangSmith LLM Gateway, which
+# uses the workspace's provider secret) or OPENAI_API_KEY (direct). That is
+# exactly the workshop model — everyone evaluates against their own workspace.
+# Non-US orgs also set LANGSMITH_ENDPOINT and use their regional gateway URL.
 on:
   pull_request:
     types: [opened, synchronize, reopened]
@@ -41,13 +43,13 @@ jobs:
         uses: actions/github-script@v7
         env:
           HAS_LANGSMITH: ${{ secrets.LANGSMITH_API_KEY != '' }}
-          HAS_OPENAI: ${{ secrets.OPENAI_API_KEY != '' }}
+          HAS_MODEL_ACCESS: ${{ secrets.LANGSMITH_GATEWAY != '' || secrets.OPENAI_API_KEY != '' }}
           HAS_DATASET: ${{ secrets.DATASET_NAME != '' }}
         with:
           script: |
             const missing = [];
             if (process.env.HAS_LANGSMITH !== 'true') missing.push('LANGSMITH_API_KEY');
-            if (process.env.HAS_OPENAI !== 'true')    missing.push('OPENAI_API_KEY');
+            if (process.env.HAS_MODEL_ACCESS !== 'true') missing.push('LANGSMITH_GATEWAY (or OPENAI_API_KEY)');
             if (process.env.HAS_DATASET !== 'true')   missing.push('DATASET_NAME');
 
             if (missing.length === 0) {
@@ -115,7 +117,11 @@ jobs:
         id: run
         env:
           LANGSMITH_API_KEY:    ${{ secrets.LANGSMITH_API_KEY }}
-          OPENAI_API_KEY:       ${{ secrets.OPENAI_API_KEY }}
+          # Route ChatOpenAI through the LangSmith LLM Gateway (needs
+          # langchain-openai>=1.4.1 in uv.lock). Takes precedence over
+          # OPENAI_API_KEY when both are set.
+          LANGSMITH_GATEWAY:    ${{ secrets.LANGSMITH_GATEWAY }}
+          OPENAI_API_KEY:      ${{ secrets.OPENAI_API_KEY }}
           DATASET_NAME:         ${{ secrets.DATASET_NAME }}
           LANGSMITH_WORKSPACE_ID: ${{ secrets.LANGSMITH_WORKSPACE_ID }}
           LANGSMITH_ENDPOINT:   ${{ secrets.LANGSMITH_ENDPOINT }}
