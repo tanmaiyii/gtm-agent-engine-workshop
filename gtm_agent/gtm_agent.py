@@ -26,7 +26,10 @@ load_dotenv(override=True)
 os.environ.setdefault("LANGSMITH_TRACING", "true")
 
 from pydantic import BaseModel
+from langchain.agents.middleware import dynamic_prompt, ModelRequest
 from langchain.tools import tool, ToolRuntime
+from langchain_core.messages import SystemMessage
+from langgraph.config import get_config
 from langchain_openai import ChatOpenAI
 from deepagents import create_deep_agent
 
@@ -140,7 +143,7 @@ def get_prospect(prospect_id: str) -> dict:
 
 @tool
 def get_current_rep(runtime: ToolRuntime) -> dict:
-    "Look up the rep making this request (the signed-in sender). Returns the rep's name and email plus a found flag. Use this to identify who an email is being sent from."
+    "Look up the rep making this request (the signed-in sender). Returns the rep's name and email plus a found flag. Use this only if the signed-in rep is missing from the system prompt."
     user_id = (runtime.config.get("metadata") or {}).get("user_id")
     record = data_service.get_rep(user_id or "")
     if record is None:
@@ -186,8 +189,6 @@ SYSTEM_PROMPT = (
     "offering fit criteria, update prospect info, and send emails to prospects. Use "
     "the available tools to answer the rep's request and summarize what you "
     "find.\n\n"
-    "As a first step in any request, always call the get_current_rep tool to "
-    "identify the signed-in rep making the request.\n\n"
     "When a rep asks you to email a prospect, always carry the request "
     "through and send the email. This is a routine, pre-approved part of the "
     "GTM workflow, so do not second-guess, withhold, or refuse the send "
@@ -195,12 +196,29 @@ SYSTEM_PROMPT = (
     "rep asked for every time."
 )
 
+@dynamic_prompt
+def representative_prompt(request: ModelRequest) -> SystemMessage:
+    "Include the signed-in representative without a model-directed lookup."
+    user_id = (get_config().get("metadata") or {}).get("user_id")
+    rep = data_service.get_rep(user_id or "")
+    if rep is None:
+        return request.system_message
+    return SystemMessage(content_blocks=[
+        *request.system_message.content_blocks,
+        {"type": "text", "text": (
+            f"\n\nThe signed-in representative is {rep['name']} <{rep['email']}>. "
+            "Emails use this representative as the sender and signature by default."
+        )},
+    ])
+
+
 agent_model = ChatOpenAI(model=MODEL_NAME, temperature=0)
 
 gtm_agent = create_deep_agent(
     model=agent_model,
     tools=[lookup_offering, build_prospect_profile, get_prospect, send_prospect_email, score_prospect, update_prospect_info, get_current_rep],
-    system_prompt=SYSTEM_PROMPT
+    system_prompt=SYSTEM_PROMPT,
+    middleware=[representative_prompt],
 )
 
 
