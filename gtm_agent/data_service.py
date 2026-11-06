@@ -16,7 +16,7 @@ __all__ = [
     "get_offering", "get_prospect_record", "update_prospect_info",
     "fetch_engagement_history", "fetch_account_details", "fetch_tech_stack",
     "get_profile_from_db", "save_profile_to_db",
-    "get_rep",
+    "get_rep", "sanitize_prospect_profile",
 ]
 
 # Built prospect profiles are cached in memory (keyed by prospect_id) so repeat
@@ -60,10 +60,26 @@ def fetch_tech_stack(prospect_id):
     return PROSPECTS[prospect_id]["tech_stack"]
 
 
+def sanitize_prospect_profile(value):
+    "Return a copy with billing and identity fields removed at every depth."
+    if isinstance(value, dict):
+        return {
+            key: sanitize_prospect_profile(item)
+            for key, item in value.items()
+            if key not in (
+                "billing_qualification", "tax_id", "date_of_birth",
+                "card_on_file", "credit_check_ref",
+            )
+        }
+    if isinstance(value, list):
+        return [sanitize_prospect_profile(item) for item in value]
+    return value
+
+
 @traceable(run_type="tool", name="get_profile_from_db")
 def get_profile_from_db(prospect_id):
     "Look up a stored prospect profile. Returns {'prospect_profile': record|None}."
-    return {"prospect_profile": _PROFILES.get(prospect_id)}
+    return {"prospect_profile": sanitize_prospect_profile(_PROFILES.get(prospect_id))}
 
 
 @traceable(run_type="tool", name="save_profile_to_db")
